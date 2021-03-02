@@ -10,7 +10,7 @@
 
 
 void prepare_query(char *buff, int buff_len, long low, long high) {
-	sleep(1);
+	// sleep(1);
 	if(high <= low) high = low + 1;
 	long num = low + rand() % (high - low);
 	int i = buff_len - 1;
@@ -69,7 +69,7 @@ void main() {
 
 	server_address.sin_family = AF_INET;
 	// IP of server pc to connect with. INADDR_LOOPBACK is 127.0.0.1 i.e. localhost you can specify IP
-	server_address.sin_addr.s_addr = htonl(INADDR_ANY); //inet_addr("192.168.122.89");
+	server_address.sin_addr.s_addr =  inet_addr("192.168.122.89"); //htonl(INADDR_ANY);
 	// port of server process on server pc.
 	server_address.sin_port = htons(8080);
 

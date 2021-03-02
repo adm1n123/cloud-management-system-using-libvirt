@@ -60,8 +60,8 @@ void *serve(void *thread_no) {
 				continue;
 			}
 			
-			printf("Client fd %d:",sock_fd);
-			println(buff, buff_len);
+			// printf("Client fd %d:",sock_fd);
+			// println(buff, buff_len);
 			sum_prime(buff, buff_len);
 			write(sock_fd, buff, sizeof(buff));
 		}
