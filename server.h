@@ -32,7 +32,6 @@ void sum_prime(char *buff, int len) {
 		if(buff[i] != '\0') {
 			num *= 10;
 			num += buff[i] - '0';
-			printf("%d, ", buff[i]-'0');
 		}
 	}
 
