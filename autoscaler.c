@@ -211,15 +211,31 @@ int connect_to_load_balancer() {
 }
 
 int notify_load_balancer(virDomainPtr domPtr, int NOTI_TYPE) {
+	printf("noti called\n");
 	static int msg_len = 50;
 	char *STR_SUCCESS = "SUCCESS";
 	char *STR_FAILED = "FAILED";
 
 	char message[msg_len]; // use strtok and send space filled message.
 
-	char *IP = "xxx.xxx.xxx.xxx;"; // get the IP of domPtr
-	char *PORT = "xxxx;";
+	char *IP = NULL; // IP of domPtr
 	char *TYPE;
+
+	printf("getting interfaces\n");
+	virDomainInterfacePtr *ifaces = NULL;
+	int ifaces_count = virDomainInterfaceAddresses(domPtr, &ifaces, 0, 0);
+	if(ifaces_count < 0) {
+		fprintf(stderr, "Error getting interfaces\n");
+		return FAILED;
+	}
+	printf("printing addresses\n");
+	virDomainIPAddressPtr ip_addr = ifaces[0]->addrs + 0; // only one interface hence ifaces[0] is used for VM IP. +0 for first entry of array of IPs of interface. 
+	IP = ip_addr->addr;
+	if(IP == NULL) {
+		fprintf(stderr, "Error getting IP address\n");
+		return FAILED;
+	}
+	IP = strcat(IP, ";");
 
 	if(NOTI_TYPE == NOTI_SCALE_OUT) {
 		TYPE = "SCALE_OUT;";
@@ -228,7 +244,7 @@ int notify_load_balancer(virDomainPtr domPtr, int NOTI_TYPE) {
 		TYPE = "SCALE_IN;";
 	}
 
-	char *msg = strcat(TYPE, strcat(IP,PORT));
+	char *msg = strcat(TYPE, IP);
 	strcpy(message, msg);
 
 	int flag = write(load_bal_sock_fd, message, msg_len);
@@ -386,10 +402,10 @@ void scale_in() {
 void main() {
 	
 	init();
-	// int sock_fd = connect_to_load_balancer();
 
 	while(true) {
 		int load = analyse_cpu_usage();
+
 		if(load == CPU_USAGE_HIGH) {
 			printf("CPU Usage High\n");
 			scale_out(); // increase resources
