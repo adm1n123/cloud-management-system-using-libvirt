@@ -47,7 +47,7 @@ void *serve(void *thread_no) {
 	char buff[buff_len];
 
 	int nfds, len;
-	while(1) {
+	while(true) {
 		nfds = epoll_wait(epolls[thread_idx].epoll_fd, epolls[thread_idx].response_events, 10, -1);// 10 is the maxevents to be returned by call (we have allocated space for 10 events during epoll instance creation you can increase) -1 timeout means it will never timeout means call returns in case of events/interrupts.
 		for(int i = 0; i < nfds; i++) {
 			int sock_fd = epolls[thread_idx].response_events[i].data.fd;
@@ -62,6 +62,9 @@ void *serve(void *thread_no) {
 			
 			// printf("Client fd %d:",sock_fd);
 			// println(buff, buff_len);
+			/*
+			TODO: read all the request and respond. if you don't read all the data then in next iteration epoll_wait may not trigger.
+			*/
 			sum_prime(buff, buff_len);
 			write(sock_fd, buff, sizeof(buff));
 		}

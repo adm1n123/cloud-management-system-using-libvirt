@@ -199,7 +199,7 @@ int connect_to_load_balancer() {
 	// IP of server pc to connect with. INADDR_LOOPBACK is 127.0.0.1 i.e. localhost you can specify IP
 	load_bal_address.sin_addr.s_addr =  htonl(INADDR_ANY);
 	// port of server process on server pc.
-	load_bal_address.sin_port = htons(8081); // verify(server ports and load balancer ports must be different since both are in private network)
+	load_bal_address.sin_port = htons(8181); // verify(server ports and load balancer ports must be different since both are in private network)
 
 	flag = connect(sock_fd, (struct sockaddr *)&load_bal_address, sizeof(load_bal_address));
 	if(flag == -1) {
