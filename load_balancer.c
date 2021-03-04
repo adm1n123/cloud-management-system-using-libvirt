@@ -21,7 +21,8 @@ new client's connection request is allocated to worker threads in round robbin f
 #include <sys/epoll.h>
 #include <pthread.h>
 #include <arpa/inet.h>
-
+#include <time.h>
+#include <signal.h>
 
 #define SUCCESS 1
 #define FAILED -1 // don't change to zero could be treated as socket_fd in connect_to_server() method.
@@ -33,15 +34,30 @@ void make_non_block_socket(int fd); // make the socket fd non blocking so that r
 int create_lstn_sock_fd(); // create listening socket.
 
 
+int auto_sclr_sock_fd; // autoscaler socket fo.
+int lstn_sock_fd; // listening socket fd used to connect to auto scaler.
+
+
 struct my_epoll_context { // this is custom structure used for data storation.
 	int epoll_fd; // this is file descriptor of epoll instance. we will add remove socket fds using this epoll_fd.
 	struct epoll_event *response_events; // when we wait on epoll then list of event will be returned(of type 'struct epoll_event') and we will store those in this memory (NOTE: we have already created memory for this pointer).
 	// you can store response events anywhere but it is good to store the data related to same epoll in same structure.
 } my_epoll; // only one epoll is created to receive responses from server. and any no of threads can manage it but I used one thread to monitor responses.
 
+
+struct threads {
+	pthread_t req_thread; // request generator threads.
+	void * req_thread_args;
+
+	pthread_t res_thread;
+	void * res_thread_args;
+
+} threads;
+
 struct live_server_entry {
 	char *IP;
 	int server_sock_fd;
+	bool high_load;
 	struct live_server_entry* next;
 } *live_serv_list = NULL;
 
@@ -50,6 +66,7 @@ struct live_server_entry* insert_server_entry(char *IP, int server_sock_fd) {
 	eptr->IP = calloc(strlen(IP)+1, sizeof(char));
 	strcpy(eptr->IP, IP);
 	eptr->server_sock_fd = server_sock_fd;
+	eptr->high_load = false;
 	eptr->next = NULL;
 
 	if(live_serv_list == NULL) {
@@ -92,24 +109,97 @@ struct live_server_entry* get_server_entry(char *IP) {
 	return eptr;
 }
 
+struct request_meta {
+	long request_id;
+	int range_high; // request data max value.
+	int range_low; // request data min value.
+	int swing_delay; // could be +ve/-ve;
+	unsigned int low_load_delay; // 1000 micro-second for usleep().
+	unsigned int high_load_delay; // 10 micro-seconds for usleep().
+	unsigned int inter_req_delay; // in micro-seconds. set to 1 seconds. let the signal handler decide.
+	time_t service_start_time; // set any high value
+} req_meta;
+
+void init_req_meta() {
+	req_meta.request_id = 0;
+	req_meta.range_high = 1e4;
+	req_meta.range_low = 1e3;
+	req_meta.swing_delay = 0; 
+	req_meta.low_load_delay = 1e3;
+	req_meta.high_load_delay = 1e1;
+	req_meta.inter_req_delay = 1e6;
+	req_meta.service_start_time = 0;
+	return;
+}
+
+static inline void update_swing() {
+	req_meta.inter_req_delay += req_meta.swing_delay;
+
+	if(req_meta.inter_req_delay < req_meta.high_load_delay) { // very high load reduce load. means increase the req delay.
+		if(req_meta.swing_delay < 0) req_meta.swing_delay *= -1;
+		return;
+	}
+	if(req_meta.inter_req_delay > req_meta.low_load_delay) { // very low load decrease delay.
+		if(req_meta.swing_delay > 0) req_meta.swing_delay *= -1;
+		return;
+	}
+	return;
+}
+
+void get_request(char *buff, int buff_len) {
+	
+	usleep(req_meta.inter_req_delay);
+	if(req_meta.swing_delay != 0) update_swing();
+
+	long int request_data = req_meta.range_low + rand() % (req_meta.range_high - req_meta.range_low);
+	sprintf(buff, "REQ_ID:%ld;REQ_DATA:%ld;", req_meta.request_id, request_data);
+	req_meta.request_id += 1;
+
+	return;
+}
+
 void *generate_requests(void *arg) {
 	// TODO:
 	// use system time and for given interval generate fixed number of request in round-robbin so that when new domain is spawns then no of request per domain decreases.
+	static int buff_len = 100;
+	char buff[buff_len];
+	struct live_server_entry* ptr;
+	while(true) {
+		ptr = live_serv_list;
+		while(ptr != NULL && ptr->high_load == false) {
+			get_request(buff, buff_len);
+			write(ptr->server_sock_fd, buff, buff_len);
+			ptr = ptr->next;
+		}
+
+		if(threads.req_thread_args != NULL) {
+			break;
+		}
+	}
 }
 
+
+
 void init_request_thread() {
-	pthread_t req_thread; // request generator threads.
-	pthread_create(&req_thread, NULL, &generate_requests, (void *)-1); // creating the thread
+	threads.req_thread_args = NULL;
+	pthread_create(&threads.req_thread, NULL, &generate_requests, NULL); // creating the thread
+	return;
+}
+
+void stop_request_thread() {
+	threads.req_thread_args = (void *)1;
+	pthread_join(threads.req_thread, NULL);
+	return;
 }
 
 
 void *process_server_responses(void *arg) {
 
-	static int buff_len = 25;
+	static int buff_len = 100;
 	char buff[buff_len];
 	int nfds, len;
 	while(true) {
-		nfds = epoll_wait(my_epoll.epoll_fd, my_epoll.response_events, 10, -1);// 10 is the maxevents to be returned by call (we have allocated space for 10 events during epoll instance creation you can increase) -1 timeout means it will never timeout means call returns in case of events/interrupts.
+		nfds = epoll_wait(my_epoll.epoll_fd, my_epoll.response_events, 10, 1);// 10 is the maxevents to be returned by call (we have allocated space for 10 events during epoll instance creation you can increase) 1 timeout means wait for 1 second.
 		for(int i = 0; i < nfds; i++) {
 			int sock_fd = my_epoll.response_events[i].data.fd;
 
@@ -120,14 +210,22 @@ void *process_server_responses(void *arg) {
 			/*
 			TODO: read until socket is empty.
 			*/
-
-
-			// TODO: make buff length 50 and print request with response don't let server modify the request sent.
 			
 			printf("Server response: %s\n", buff);
 		}
+		if(threads.res_thread_args != NULL) {
+			break;
+		}
 	}
+
 }
+
+void stop_response_thread() {
+	threads.res_thread_args = (void *)1;
+	pthread_join(threads.res_thread, NULL);
+	return;
+}
+
 
 void init_response_thread() {
 	pthread_t res_thread; // response threads.
@@ -141,7 +239,7 @@ void make_non_block_socket(int fd) {
 	flags |= O_NONBLOCK; // adding one more flag to socket. F_SETFL is set flag command.
 	flags = fcntl(fd, F_SETFL, flags); // setting the new flag.
 	if(flags == -1) {
-		printf("non block failed for fd: %d", fd);
+		printf("O_NONBLOCK failed for sock fd: %d", fd);
 		exit(0);
 	}
 }
@@ -200,10 +298,69 @@ int connect_to_server(char *IP) {
 	return sock_fd;
 }
 
+void destroy() {
 
-int main() {
-	int auto_sclr_sock_fd, len, flag, turn = 0;
-	int lstn_sock_fd; // listening socket fd used to connect to auto scaler.
+	printf("Started destroying ...\n");
+	close(lstn_sock_fd);
+	printf("listening socket closed.\n");
+	close(auto_sclr_sock_fd);
+	printf("autoscaler socket closed\n");
+	struct live_server_entry* ptr = live_serv_list;
+	while(ptr != NULL) {
+		close(ptr->server_sock_fd);
+		printf("Server: %s socket closed\n", ptr->IP);
+		ptr = ptr->next;
+	}
+	printf("Finished destroying.\n");
+	return;
+}
+
+void signal_handler(int sig_type) {
+	if(sig_type == SIGINT) {
+		printf("Enter one choice: LOW | HIGH | SWING | EXIT\n");
+		char choice[10];
+		scanf("%s", choice);
+		if(strcmp(choice, "LOW") == 0) {
+			req_meta.inter_req_delay = req_meta.low_load_delay;
+			req_meta.swing_delay = 0;
+		} else 	if(strcmp(choice, "HIGH") == 0) {
+			req_meta.inter_req_delay = req_meta.high_load_delay;
+			req_meta.swing_delay = 0;
+		} else 	if(strcmp(choice, "SWING") == 0) {
+			req_meta.swing_delay = 1 + rand() % 10;
+			printf("SWING delay set to: %d micro-seconds\n", req_meta.swing_delay);
+		} else 	if(strcmp(choice, "EXIT") == 0) {
+			printf("Exiting\n");
+			threads.req_thread_args = (void *)1;
+			pthread_join(threads.req_thread, NULL);
+			printf("Request thread stopped\n");
+			printf("Waiting for 3 seconds for any server responses ...\n");
+			sleep(3);
+			threads.res_thread_args = (void *)1;
+			pthread_join(threads.res_thread, NULL);
+			printf("Response thread stopped\n");
+			destroy();
+			exit(0);
+		} else {
+			printf("INVALID CHOICE\n");
+		}
+
+	} else if(sig_type == SIGTERM) {
+		printf("Got SIGTERM exiting\n");
+		exit(0);
+	}
+	return;
+}
+
+
+void main() {
+
+	// register signal handler in main thead so that main thread calls signal handler.
+	signal(SIGINT, signal_handler);
+	signal(SIGTERM, signal_handler);
+
+	int len, flag;
+	
 
 	lstn_sock_fd = create_lstn_sock_fd();
 
@@ -222,9 +379,12 @@ int main() {
 	}
 
 	// for EPOLLET events it is advisable to use non-blocking operations on fd eg. read/write on socket.
+	
 	make_non_block_socket(auto_sclr_sock_fd);
 
-	init_request_thread();
+	init_req_meta(); // initializing request meta data.
+	
+	init_request_thread(); // request generator thread.
 
 	init_response_thread(); // response collector thread.
 
@@ -268,6 +428,11 @@ int main() {
 			interested_event.events = EPOLLIN | EPOLLET; // adding the event type for this socket fd.
 			epoll_ctl(my_epoll.epoll_fd, EPOLL_CTL_ADD, server_sock_fd, &interested_event); // adding the socket to epoll instance.
 			printf("socket fd:%d added to epoll\n", server_sock_fd);
+			
+			stop_request_thread();
+			insert_server_entry(IP, server_sock_fd);
+			init_request_thread();
+
 			continue;
 		}
 		if(strcmp(TYPE, "SCALE_IN") == 0) {
@@ -280,7 +445,10 @@ int main() {
 			if(close(ptr->server_sock_fd) == 0) { // since only of sock_fd for each IP(no multiple fds by using dup, dup2) hence closing fd will also remove from epoll context no need of epoll_ctl(EPOLL_CTL_DEL)
 				strcpy(message, STR_SUCCESS);
 				write(auto_sclr_sock_fd, message, msg_len);
+
+				stop_request_thread();
 				delete_server_entry(IP);
+				init_request_thread();
 				continue;
 			}
 			strcpy(message, STR_FAILED);
@@ -288,129 +456,5 @@ int main() {
 			continue;
 		}
 	}
-
-	close(lstn_sock_fd);
-	close(auto_sclr_sock_fd);
-	// close these fds in singnal handler because this is unreachable.
+	return;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// void prepare_query(char *buff, int buff_len, long low, long high) {
-// 	// sleep(1);
-// 	if(high <= low) high = low + 1;
-// 	long num = low + rand() % (high - low);
-// 	int i = buff_len - 1;
-// 	while(num > 0) {
-// 		buff[i--] = num % 10 + '0';
-// 		num /= 10;
-// 	}
-// 	while(i >= 0) buff[i--] = '\0';
-// 	strncpy(buff, "prime", 5);
-// }
-
-// void print(char *buff, int len) {
-// 	for(int i = 0; i < len; i++) printf("%c", buff[i]);
-// }
-// void println(char *buff, int buff_len) {
-// 	print(buff, buff_len);
-// 	printf("\n");
-// }
-
-// void query(int server_fd) {
-	
-// 	static int buff_len = 25;
-// 	char buff[25];
-// 	printf("Query: ");
-// 	while(1) {
-// 		bzero(buff, sizeof(buff));
-// 		strncpy(buff, "prime", 5);
-// 		prepare_query(buff, buff_len, 0, 50);
-// 		println(buff, buff_len);
-
-// 		write(server_fd, buff, sizeof(buff));
-// 		if(strncmp(buff, "exit", 4) == 0) break;
-
-// 		bzero(buff, sizeof(buff));
-// 		read(server_fd, buff, sizeof(buff));
-// 		printf("Server: ");
-// 		println(buff, buff_len);
-// 		printf("Query: ");
-// 	}
-// 	printf("Client exit\n");
-// }
-
-// // create load balancer emthod and create thread for each server fd and call query method for each server fd. and also when server stops make that thread break the query method and close server fd.
-// // when server starts(monitor notifies) then create new thread(i.e call query method for thread).
-// // main thread will communicate with monitor.
-
-// void main() {
-// 	struct sockaddr_in server_address;
-
-// 	int sock_fd, flag;
-// 	sock_fd = socket(AF_INET, SOCK_STREAM, 0);
-// 	if(sock_fd == -1) {
-// 		printf("socket creation failed");
-// 		exit(0);
-// 	} else printf("socket created\n");
-
-// 	server_address.sin_family = AF_INET;
-// 	// IP of server pc to connect with. INADDR_LOOPBACK is 127.0.0.1 i.e. localhost you can specify IP
-// 	server_address.sin_addr.s_addr =  inet_addr("192.168.122.89"); //htonl(INADDR_ANY);
-// 	// port of server process on server pc.
-// 	server_address.sin_port = htons(8080);
-
-// 	flag = connect(sock_fd, (struct sockaddr *)&server_address, sizeof(server_address));
-// 	if(flag == -1) {
-// 		printf("Error conecting\n");
-// 		exit(0);
-// 	} else printf("connected\n");
-
-// 	query(sock_fd);
-// 	close(sock_fd);
-// }

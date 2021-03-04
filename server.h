@@ -21,19 +21,14 @@ bool is_prime(long n) {
 }
 
 void sum_prime(char *buff, int len) {
-	if(strncmp(buff, "prime", 5) != 0) {
-		printf("Error processing request\n");
-		strncpy(buff, "Error", 5);
-		return;
-	}
+	char tmp[100];
+	strcpy(tmp, buff);
+	
+	strtok(tmp, ";");
+	strtok(NULL, ":");
+	char *t = strtok(NULL, ";");
 
-	long num = 0;
-	for(int i = 5; i < len; i++) {
-		if(buff[i] != '\0') {
-			num *= 10;
-			num += buff[i] - '0';
-		}
-	}
+	long num = strtol(t, NULL, 10); // base 10.
 
 	// printf("\nFound num query:%ld, ", num);
 	long sum = 0;
@@ -43,12 +38,7 @@ void sum_prime(char *buff, int len) {
 			// printf("prime: %d, ", i);
 		}
 	}
-	// printf("\n");
-	int i = len-1;
-	while(sum > 0) {
-		buff[i--] = sum % 10 + '0';
-		sum /= 10;
-	}
-	while(i >= 0) buff[i--] = '\0';
-	strncpy(buff, "sum", 3);
+	sprintf(tmp, "%sRES_DATA:%ld;", buff, sum);
+	strcpy(buff, tmp);
+	return;
 }

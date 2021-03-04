@@ -43,7 +43,7 @@ struct my_epoll_context *epolls; // each thread has one epoll instance and all t
 void *serve(void *thread_no) {
 	int thread_idx = *(int *)thread_no;
 
-	static int buff_len = 25;
+	static int buff_len = 100;
 	char buff[buff_len];
 
 	int nfds, len;
@@ -56,7 +56,7 @@ void *serve(void *thread_no) {
 			len = read(sock_fd, buff, sizeof(buff));
 			if(len == 0) { // event occured but client didn't query means client disconnected.
 				close(sock_fd);
-				printf("socket fd: %d closed of thread no: %d\n", sock_fd, thread_idx);
+				printf("load balancer disconnected. socket fd: %d closed of thread no: %d\n", sock_fd, thread_idx);
 				continue;
 			}
 			
