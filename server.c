@@ -20,6 +20,7 @@ new client's connection request is allocated to worker threads in round robbin f
 #include <sys/epoll.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <time.h>
 #include "server.h"
 
 // function prototypes
@@ -52,21 +53,19 @@ void *serve(void *thread_no) {
 		for(int i = 0; i < nfds; i++) {
 			int sock_fd = epolls[thread_idx].response_events[i].data.fd;
 
-			bzero(buff, sizeof(buff)); // initialize buffer with ascii zero('\0')
-			len = read(sock_fd, buff, sizeof(buff));
+			len = read(sock_fd, buff, buff_len);
+
 			if(len == 0) { // event occured but client didn't query means client disconnected.
 				close(sock_fd);
 				printf("load balancer disconnected. socket fd: %d closed of thread no: %d\n", sock_fd, thread_idx);
 				continue;
 			}
-			
-			// printf("Client fd %d:",sock_fd);
-			// println(buff, buff_len);
-			/*
-			TODO: read all the request and respond. if you don't read all the data then in next iteration epoll_wait may not trigger.
-			*/
-			sum_prime(buff, buff_len);
-			write(sock_fd, buff, sizeof(buff));
+			// read all the requests in this socket.
+			while(len > 0) {
+				sum_prime(buff, buff_len);
+				write(sock_fd, buff, buff_len);
+				len = read(sock_fd, buff, buff_len);
+			}
 		}
 	}
 }
@@ -124,9 +123,26 @@ int create_lstn_sock_fd() {
 	return lstn_sock_fd;
 }
 
+void init_logs() {
+	int logs_fd = open("server.logs", O_CREAT|O_WRONLY|O_APPEND, S_IRWXU);
+	if(logs_fd < 0) {
+		fprintf(stderr, "Server logs creation failed\n");
+		return;
+	}
+	// dup2(logs_fd, STDOUT_FILENO); // all the print messages will go to logs.
+	time_t cur_time;
+	time(&cur_time);
+	printf("\n\n#####################   Server Started   #####################\nServer Start Time: %s", ctime(&cur_time));
+	printf("##############################################################\n");
+	return;
+}
+
+
 int main() {
 	int clnt_sock_fd, len, flag, turn = 0;
 	int lstn_sock_fd; // listening socket fd
+
+	init_logs();
 
 	lstn_sock_fd = create_lstn_sock_fd();
 	init_epolls_threads();

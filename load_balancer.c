@@ -27,6 +27,9 @@ new client's connection request is allocated to worker threads in round robbin f
 #define SUCCESS 1
 #define FAILED -1 // don't change to zero could be treated as socket_fd in connect_to_server() method.
 
+char *STR_SUCCESS = "SUCCESS";
+char *STR_FAILED = "FAILED";
+
 // function prototypes
 void *process_server_responses(void *arg); // server method to echo the client query. we can prepare server response for query.
 void init_response_thread(); // creating threads and creating epoll instance for each thread.
@@ -61,6 +64,16 @@ struct live_server_entry {
 	struct live_server_entry* next;
 } *live_serv_list = NULL;
 
+void print_live_servers() {
+	struct live_server_entry* ptr = live_serv_list;
+	printf("--------------- Printing Live Servers -----------\n");
+	while(ptr != NULL) {
+		printf("IP: %s, FD: %d, HIGH_LOAD: %d\n", ptr->IP, ptr->server_sock_fd, ptr->high_load);
+		ptr = ptr->next;
+	}
+	printf("-------------------------------------------------\n");
+}
+
 struct live_server_entry* insert_server_entry(char *IP, int server_sock_fd) {
 	struct live_server_entry* eptr = malloc(sizeof(struct live_server_entry));
 	eptr->IP = calloc(strlen(IP)+1, sizeof(char));
@@ -79,6 +92,8 @@ struct live_server_entry* insert_server_entry(char *IP, int server_sock_fd) {
 }
 
 void delete_server_entry(char *IP) {
+	printf("Deleting server entry IP%s:\n", IP);
+	print_live_servers();
 	if(live_serv_list == NULL) {
 		return;
 	}
@@ -86,6 +101,7 @@ void delete_server_entry(char *IP) {
 	if(strcmp(eptr->IP, IP) == 0) {
 		live_serv_list = eptr->next;
 		free(eptr);
+		print_live_servers();
 		return;
 	}
 	while(eptr->next != NULL && strcmp(eptr->next->IP, IP) != 0) {
@@ -95,6 +111,7 @@ void delete_server_entry(char *IP) {
 	struct live_server_entry* tmp = eptr->next;
 	eptr->next = eptr->next->next;
 	free(tmp);
+	print_live_servers();
 	return;
 }
 
@@ -122,12 +139,12 @@ struct request_meta {
 
 void init_req_meta() {
 	req_meta.request_id = 0;
-	req_meta.range_high = 1e4;
-	req_meta.range_low = 1e3;
+	req_meta.range_high = 1e4; // keep range smaller so that there is constant time per ops.
+	req_meta.range_low = 9e3;
 	req_meta.swing_delay = 0; 
-	req_meta.low_load_delay = 1e3;
-	req_meta.high_load_delay = 1e1;
-	req_meta.inter_req_delay = 1e6;
+	req_meta.low_load_delay = 5.5e5;
+	req_meta.high_load_delay = 1.7e5;
+	req_meta.inter_req_delay = 3e5;
 	req_meta.service_start_time = 0;
 	return;
 }
@@ -147,7 +164,7 @@ static inline void update_swing() {
 }
 
 void get_request(char *buff, int buff_len) {
-	
+	// sleep(5);
 	usleep(req_meta.inter_req_delay);
 	if(req_meta.swing_delay != 0) update_swing();
 
@@ -168,7 +185,15 @@ void *generate_requests(void *arg) {
 		ptr = live_serv_list;
 		while(ptr != NULL && ptr->high_load == false) {
 			get_request(buff, buff_len);
-			write(ptr->server_sock_fd, buff, buff_len);
+			// printf("Writing on socket fd: %d\n", ptr->server_sock_fd);
+			int flag = write(ptr->server_sock_fd, buff, buff_len);
+			if(flag < 0) {
+				close(ptr->server_sock_fd);
+				printf("Server disconnected at IP:%s\n", ptr->IP);
+				delete_server_entry(ptr->IP);
+				ptr = ptr->next;
+				continue;
+			}
 			ptr = ptr->next;
 		}
 
@@ -202,9 +227,10 @@ void *process_server_responses(void *arg) {
 		nfds = epoll_wait(my_epoll.epoll_fd, my_epoll.response_events, 10, 1);// 10 is the maxevents to be returned by call (we have allocated space for 10 events during epoll instance creation you can increase) 1 timeout means wait for 1 second.
 		for(int i = 0; i < nfds; i++) {
 			int sock_fd = my_epoll.response_events[i].data.fd;
-
+			printf("Reading from socket\n");
 			len = read(sock_fd, buff, sizeof(buff));
-			if(len == 0) { // event occured but client didn't query means client disconnected. don't close fd let the autoscaler inform what to do.
+			if(len == 0) { // event occured but no data means server disconnected. don't close fd let autoscaler inform what to do.
+				// printf("Server disconnected sock fd: %d\n", sock_fd);
 				continue;
 			}
 			/*
@@ -251,9 +277,9 @@ int create_lstn_sock_fd() {
 	
 	int lstn_sock_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if(lstn_sock_fd == -1) {
-		printf("listening socket creation failed\n");
+		printf("Listening socket creation failed\n");
 		exit(0);
-	} else printf("listening socket created\n");
+	} else printf("Listening socket created\n");
 
 	lstn_socket.sin_family = AF_INET;
 	lstn_socket.sin_addr.s_addr = htonl(INADDR_ANY); // since autoscaler is on same host.
@@ -269,7 +295,7 @@ int create_lstn_sock_fd() {
 	if(flag == -1) {
 		printf("Error listening on socket\n");
 		exit(0);
-	} else printf("listening...\n");
+	} else printf("Listening socket is ready to accept connections.\n");
 	return lstn_sock_fd;
 }
 
@@ -317,7 +343,7 @@ void destroy() {
 
 void signal_handler(int sig_type) {
 	if(sig_type == SIGINT) {
-		printf("Enter one choice: LOW | HIGH | SWING | EXIT\n");
+		printf("\nEnter one choice: LOW | HIGH | SWING | EXIT\n");
 		char choice[10];
 		scanf("%s", choice);
 		if(strcmp(choice, "LOW") == 0) {
@@ -327,7 +353,7 @@ void signal_handler(int sig_type) {
 			req_meta.inter_req_delay = req_meta.high_load_delay;
 			req_meta.swing_delay = 0;
 		} else 	if(strcmp(choice, "SWING") == 0) {
-			req_meta.swing_delay = 1 + rand() % 10;
+			scanf("%d", &req_meta.swing_delay);//5000 + rand() % 100;
 			printf("SWING delay set to: %d micro-seconds\n", req_meta.swing_delay);
 		} else 	if(strcmp(choice, "EXIT") == 0) {
 			printf("Exiting\n");
@@ -348,25 +374,18 @@ void signal_handler(int sig_type) {
 	} else if(sig_type == SIGTERM) {
 		printf("Got SIGTERM exiting\n");
 		exit(0);
+	} else if(sig_type == SIGPIPE) {
+		printf("Got SIGPIPE\n");
 	}
 	return;
 }
 
-
-void main() {
-
-	// register signal handler in main thead so that main thread calls signal handler.
-	signal(SIGINT, signal_handler);
-	signal(SIGTERM, signal_handler);
-
+int connect_to_autoscaler() {
 	int len, flag;
-	
-
-	lstn_sock_fd = create_lstn_sock_fd();
-
 	struct sockaddr_in client_addr;
 	len = sizeof(client_addr);
 	// accept(listen_fd, NULL, NULL); we can use this also because we are not using client IP,port etc. hence no point in passing second argument. second argument is reference to structure in which connected clients IP, port is stored.
+	printf("Waiting for autoscaler ...\n");
 	while(true) {
 		auto_sclr_sock_fd = accept(lstn_sock_fd, (struct sockaddr *)&client_addr, &len);
 		if(auto_sclr_sock_fd == -1) {
@@ -374,13 +393,83 @@ void main() {
 			sleep(3);
 			continue;
 		}
-		printf("connected to autoscaler\n");
+		printf("Connected to autoscaler\n");
 		break;
 	}
+}
 
-	// for EPOLLET events it is advisable to use non-blocking operations on fd eg. read/write on socket.
+void scale_out(char *message, int msg_len, char *TYPE, char *IP) {
+
+	struct live_server_entry* ptr = get_server_entry(IP);
 	
-	make_non_block_socket(auto_sclr_sock_fd);
+	if(ptr != NULL) { 	// already running.
+		printf("Server is already running.\n");
+		strcpy(message, STR_SUCCESS);
+		write(auto_sclr_sock_fd, message, msg_len);
+		return;
+	}
+	printf("Connecting ... to new server at IP:%s \n", IP);
+	int server_sock_fd = connect_to_server(IP);
+	if(server_sock_fd < 0) {
+		strcpy(message, STR_FAILED);
+		write(auto_sclr_sock_fd, message, msg_len);
+		return;
+	}
+	make_non_block_socket(server_sock_fd); // so that response thread do not block(means entire process does not block)
+	
+
+	struct epoll_event interested_event; // struct epoll_event is inbuilt structure we just created variable of this struct type to store interested event data for this epoll instance.
+	interested_event.data.fd = server_sock_fd; // adding the socket fd
+	interested_event.events = EPOLLIN | EPOLLET; // adding the event type for this socket fd.
+	epoll_ctl(my_epoll.epoll_fd, EPOLL_CTL_ADD, server_sock_fd, &interested_event); // adding the socket to epoll instance.
+	printf("socket fd:%d added to epoll\n", server_sock_fd);
+	
+	strcpy(message, STR_SUCCESS);
+	write(auto_sclr_sock_fd, message, msg_len);
+
+	stop_request_thread();
+	insert_server_entry(IP, server_sock_fd);
+	init_request_thread();
+
+	return;
+}
+
+void scale_in(char *message, int msg_len, char *TYPE, char *IP) {
+	struct live_server_entry* ptr = get_server_entry(IP);
+	if(ptr == NULL) {
+		printf("Server already disconnected at IP:%s\n", IP);
+		strcpy(message, STR_SUCCESS);
+		write(auto_sclr_sock_fd, message, msg_len);
+		return;
+	}
+	// 
+	if(close(ptr->server_sock_fd) == 0) { // since only of sock_fd for each IP(no multiple fds by using dup, dup2) hence closing fd will also remove from epoll context no need of epoll_ctl(EPOLL_CTL_DEL)
+		strcpy(message, STR_SUCCESS);
+		write(auto_sclr_sock_fd, message, msg_len);
+		printf("Disconnected from server at IP:%s\n", IP);
+		stop_request_thread();
+		delete_server_entry(IP);
+		init_request_thread();
+		return;
+	}
+	strcpy(message, STR_FAILED);
+	write(auto_sclr_sock_fd, message, msg_len);
+	return;
+
+}
+
+
+
+void main() {
+
+	// register signal handler in main thead so that main thread calls signal handler.
+	signal(SIGINT, signal_handler);
+	signal(SIGTERM, signal_handler);
+	signal(SIGPIPE, signal_handler);
+	
+	lstn_sock_fd = create_lstn_sock_fd();
+	
+	connect_to_autoscaler();
 
 	init_req_meta(); // initializing request meta data.
 	
@@ -392,67 +481,32 @@ void main() {
 	char message[msg_len];
 	char *TYPE;
 	char *IP;
-	char *STR_SUCCESS = "SUCCESS";
-	char *STR_FAILED = "FAILED";
+
 	while(true) { // talk to autoscaler.
 		int flag = read(auto_sclr_sock_fd, message, msg_len);
+		// printf("Reading autoscaler message:%s, flag:%d\n", message, flag);
+		sleep(1);
 		if(flag == 0) {
-			sleep(1);
+			printf("Autoscaler disconnected.\n");
+			connect_to_autoscaler();
+			continue;
+		}
+		if(flag != msg_len) {
+			printf("Error reading notification from autoscaler\n");
 			continue; // no message;
 		}
 
-		if(flag != msg_len) {
-			fprintf(stderr, "Error reading message\n");
-			continue;
-		}
 		TYPE = strtok(message, ";");
 		IP = strtok(NULL, ";");
-		struct live_server_entry* ptr = get_server_entry(IP);
 
 		if(strcmp(TYPE, "SCALE_OUT") == 0) {
-			if(ptr != NULL) { 	// already running.
-				strcpy(message, STR_SUCCESS);
-				write(auto_sclr_sock_fd, message, msg_len);
-				continue;
-			}
-			int server_sock_fd = connect_to_server(IP);
-			if(server_sock_fd < 0) {
-				strcpy(message, STR_FAILED);
-				write(auto_sclr_sock_fd, message, msg_len);
-				continue;
-			}
-			make_non_block_socket(server_sock_fd); // so that response thread do not block(means entire process does not block)
-
-			struct epoll_event interested_event; // struct epoll_event is inbuilt structure we just created variable of this struct type to store interested event data for this epoll instance.
-			interested_event.data.fd = server_sock_fd; // adding the socket fd
-			interested_event.events = EPOLLIN | EPOLLET; // adding the event type for this socket fd.
-			epoll_ctl(my_epoll.epoll_fd, EPOLL_CTL_ADD, server_sock_fd, &interested_event); // adding the socket to epoll instance.
-			printf("socket fd:%d added to epoll\n", server_sock_fd);
-			
-			stop_request_thread();
-			insert_server_entry(IP, server_sock_fd);
-			init_request_thread();
-
+			scale_out(message, msg_len, TYPE, IP);
+			print_live_servers();
 			continue;
 		}
 		if(strcmp(TYPE, "SCALE_IN") == 0) {
-			if(ptr == NULL) {
-				strcpy(message, STR_SUCCESS);
-				write(auto_sclr_sock_fd, message, msg_len);
-				continue;
-			}
-			// 
-			if(close(ptr->server_sock_fd) == 0) { // since only of sock_fd for each IP(no multiple fds by using dup, dup2) hence closing fd will also remove from epoll context no need of epoll_ctl(EPOLL_CTL_DEL)
-				strcpy(message, STR_SUCCESS);
-				write(auto_sclr_sock_fd, message, msg_len);
-
-				stop_request_thread();
-				delete_server_entry(IP);
-				init_request_thread();
-				continue;
-			}
-			strcpy(message, STR_FAILED);
-			write(auto_sclr_sock_fd, message, msg_len);
+			scale_in(message, msg_len, TYPE, IP);
+			print_live_servers();
 			continue;
 		}
 	}

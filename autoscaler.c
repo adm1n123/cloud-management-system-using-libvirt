@@ -103,6 +103,7 @@ void delete_dom_stat(virDomainPtr domPtr) {	// delete dom from active domain lis
 }
 
 struct doms_stats* get_dom_stat(virDomainPtr domPtr) {
+	printf("get dom called\n");
 	struct doms_stats *ptr = statsPtr;
 	if(domPtr == NULL) {
 		printf("Invalid dom_stat get domPtr is NULL\n");
@@ -110,10 +111,12 @@ struct doms_stats* get_dom_stat(virDomainPtr domPtr) {
 	}
 	while(ptr != NULL) {
 		if(ptr->domPtr == domPtr) {
+			printf("found domPtr\n");
 			return ptr;
 		}
 		ptr = ptr->next;
 	}
+	printf("not found domPtr\n");
 	return NULL;
 }
 
@@ -125,6 +128,7 @@ void init_server() { // make sure at least one server is started.
 	int count = 0;
 	for(int i = 0; i < my_doms.doms_count; i++) {
 		if(virDomainIsActive(my_doms.domains[i]) == 1) {
+			printf("Domain already running: %s\n", virDomainGetName(my_doms.domains[i]));
 			struct doms_stats* ptr = insert_dom_stat(my_doms.domains[i]);
 			int notified = notify_load_balancer(ptr->domPtr, NOTI_SCALE_OUT);
 			if(notified == SUCCESS) {
@@ -132,8 +136,6 @@ void init_server() { // make sure at least one server is started.
 			} else {
 				ptr->notified = NOTI_DOM_CRT_FAILD;
 			}
-
-			printf("domain already running: %s\n", virDomainGetName(my_doms.domains[i]));
 			count += 1;
 		}
 	}
@@ -191,9 +193,9 @@ int connect_to_load_balancer() {
 	int sock_fd, flag;
 	sock_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if(sock_fd == -1) {
-		printf("socket creation failed");
+		printf("Socket creation failed");
 		exit(0);
-	} else printf("socket created\n");
+	}
 
 	load_bal_address.sin_family = AF_INET;
 	// IP of server pc to connect with. INADDR_LOOPBACK is 127.0.0.1 i.e. localhost you can specify IP
@@ -205,7 +207,7 @@ int connect_to_load_balancer() {
 	if(flag == -1) {
 		printf("Error conecting load balancer\n");
 		exit(0);
-	} else printf("connected to load balancer\n");
+	} else printf("Connected to load balancer\n");
 
 	return sock_fd;
 }
@@ -230,36 +232,44 @@ int notify_load_balancer(virDomainPtr domPtr, int NOTI_TYPE) {
 	}
 	printf("printing addresses\n");
 	virDomainIPAddressPtr ip_addr = ifaces[0]->addrs + 0; // only one interface hence ifaces[0] is used for VM IP. +0 for first entry of array of IPs of interface. 
+	
 	IP = ip_addr->addr;
 	if(IP == NULL) {
 		fprintf(stderr, "Error getting IP address\n");
 		return FAILED;
 	}
-	IP = strcat(IP, ";");
 
+	IP = strcat(IP, ";");
+	
 	if(NOTI_TYPE == NOTI_SCALE_OUT) {
 		TYPE = "SCALE_OUT;";
 	}
 	if(NOTI_TYPE == NOTI_SCALE_IN) {
 		TYPE = "SCALE_IN;";
 	}
+	printf("Notifying server IP:%s to load_balancer for NOTI_TYPE: %s\n", IP, TYPE);
 
-	char *msg = strcat(TYPE, IP);
-	strcpy(message, msg);
+	strcpy(message, TYPE);
+	strcat(message, IP);	
 
 	int flag = write(load_bal_sock_fd, message, msg_len);
 	if(flag != msg_len) {
 		fprintf(stderr, "Error notifying\n");
 		return FAILED;
 	}
+
 	flag = read(load_bal_sock_fd, message, msg_len);
+	printf("NOTI response from load balancer: %s, flag:%d, message length:%ld\n", message, flag, sizeof(message));
 	if(flag != msg_len) {
 		fprintf(stderr, "Error getting ACK\n");
 		return FAILED;
 	}
+	
 	if(strncmp(message, STR_SUCCESS, strlen(STR_SUCCESS)) == 0) {
+		printf("Noti success\n");
 		return SUCCESS;
 	}
+	printf("Noti failed\n");
 	return FAILED;
 }
 
@@ -292,7 +302,7 @@ int analyse_cpu_usage() {
 	}
 	sleep(1); // 1000 msec. if sleeping for n seconds divide time difference by n during calulation.
 	ptr = statsPtr;
-	printf("got it1\n");
+
 	while(ptr != NULL) {
 		get_cpu_usage(ptr);
 		double cur_per = 0.40 * (ptr->history / 1.0e9) + 0.60 * ((ptr->current - ptr->last) / 1.0e9); // divide by nano sec to get time spend per second.
@@ -315,12 +325,13 @@ int analyse_cpu_usage() {
 	avg_load /= dom_count;
 	printf("no of doms: %d, 	avg_load %lf\n", dom_count, avg_load);
 
-	if(avg_load > 0.60) return CPU_USAGE_HIGH;
-	if(avg_load > 0.40) return CPU_USAGE_MOD;
+	if(avg_load > 0.80) return CPU_USAGE_HIGH;
+	if(avg_load > 0.30) return CPU_USAGE_MOD;
 	return CPU_USAGE_LOW;
 }
 
 void scale_out() {
+	printf("Scale out called\n");
 	// check already created but not notified doms
 	struct doms_stats* sptr = statsPtr;
 	while(sptr != NULL) {
@@ -335,6 +346,7 @@ void scale_out() {
 	}
 
 	// create new domain
+	printf("Finding new domain to start.\n");
 	virDomainPtr domPtr = NULL;
 	for(int i = 0; i < my_doms.doms_count; i++) {
 		if(virDomainIsActive(my_doms.domains[i]) == 0 && 	// 0: inactive  1: active  -1: error.
@@ -347,55 +359,65 @@ void scale_out() {
 		printf("Not enough domains to scale out\n");
 		return;
 	}
-	struct doms_stats* ptr = insert_dom_stat(domPtr);
+	printf("Got new domain to scale out\n");
+	sptr = insert_dom_stat(domPtr);
+	printf("check 1\n");
 	int notified = notify_load_balancer(sptr->domPtr, NOTI_SCALE_OUT); // start sending request to this.
 	if(notified == SUCCESS) {
-		ptr->notified = NOTI_DOM_CRT_SUCC;
+		sptr->notified = NOTI_DOM_CRT_SUCC;
 		printf("Domain created: %s\n", virDomainGetName(domPtr));
 	} else {
-		ptr->notified = NOTI_DOM_CRT_FAILD;
+		sptr->notified = NOTI_DOM_CRT_FAILD;
 	}
-		
 	return;
 }
 
 
 void scale_in() {
 	// check already stopped but not notified doms
+	printf("check 1\n");
 	struct doms_stats* sptr = statsPtr;
 	while(sptr != NULL) {
 		if(sptr->notified == NOTI_DOM_SHTDWN_FAILD) {
 			int notified = notify_load_balancer(sptr->domPtr, NOTI_SCALE_IN); // stop sending request to this.
-			if(notified == SUCCESS) {
-				sptr->notified = NOTI_DOM_SHTDWN_SUCC;
-				delete_dom_stat(sptr->domPtr);
+			printf("check 2\n");
+			if(notified == SUCCESS && 
+				virDomainShutdown(sptr->domPtr) == 0) { // 0: success
+					delete_dom_stat(sptr->domPtr);
+					printf("Shuting down domain: %s\n", virDomainGetName(sptr->domPtr));
+					printf("check 3\n");
+					return;
 			}
-			return;
 		}
 		sptr = sptr->next;
 	}
 	if(virConnectNumOfDomains(conn) <= 1) { // number of active domains. don't stop all the domains.
 		return;
 	}
-
+	printf("check 5\n");
 	virDomainPtr domPtr = NULL;
 	for(int i = 0; i < my_doms.doms_count; i++) {
-		if(virDomainIsActive(my_doms.domains[i]) == 1) { 	// 1: active.
+		if(virDomainIsActive(my_doms.domains[i]) == 1) { 	// virDomainState see the state it should not be shuting down state. but I am using doms_stats list to verify this.
 				domPtr = my_doms.domains[i]; 			// get any one domain to shutdown.
+				struct doms_stats* tmp = get_dom_stat(domPtr);
+				if(tmp == NULL) return; // wait until machine properly shutdown because entry is only deleted when machine is being shutdown.
+				printf("check 4\n");
 				break;
 		} 
 	}
-
-	int notified = notify_load_balancer(domPtr, NOTI_SCALE_IN); // stop sending request domPtr;
-		/*
-	to do:
-	notify the load balancer about stopping domains IP and return success from load balancer if TCP connection stopped or already stopped.
-	*/
-
-	if(notified == SUCCESS && virDomainShutdown(domPtr) == 0) { // 0: success
-		delete_dom_stat(domPtr);
-		printf("Domain shutdown: %s\n", virDomainGetName(domPtr));
-	}
+	printf("check 6\n");
+	int notified = notify_load_balancer(domPtr, NOTI_SCALE_IN); // inform to stop sending request
+	printf("check 7\n");
+	sptr = get_dom_stat(domPtr);
+	printf("check 8:sptr:%p\n", sptr);
+	sptr->notified = NOTI_DOM_SHTDWN_FAILD; // if noti success and domain shutdown success then only remove entry from live servers
+	printf("check 9\n");
+	if(notified == SUCCESS && 
+		virDomainShutdown(domPtr) == 0) { // 0: success
+			printf("check 10\n");
+			delete_dom_stat(domPtr);
+			printf("Shuting down domain: %s\n", virDomainGetName(domPtr));
+	} 
 }
 
 
@@ -404,8 +426,9 @@ void main() {
 	init();
 
 	while(true) {
+		printf("analysis called\n");
 		int load = analyse_cpu_usage();
-
+		printf("analysis done\n");
 		if(load == CPU_USAGE_HIGH) {
 			printf("CPU Usage High\n");
 			scale_out(); // increase resources
@@ -415,7 +438,7 @@ void main() {
 		} else {
 			printf("CPU Usage Moderate\n");
 		}
-		sleep(5);
+		sleep(1);
 	}
 
 	// close(sock_fd);
