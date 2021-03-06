@@ -64,6 +64,30 @@ struct live_server_entry {
 	struct live_server_entry* next;
 } *live_serv_list = NULL;
 
+
+struct request_meta {
+	long request_id;
+	int range_high; // request data max value.
+	int range_low; // request data min value.
+	int swing_delay; // could be +ve/-ve;
+	unsigned int low_load_delay; // 1000 micro-second for usleep().
+	unsigned int high_load_delay; // 10 micro-seconds for usleep().
+	unsigned int inter_req_delay; // in micro-seconds. set to 1 seconds. let the signal handler decide.
+	time_t service_start_time; // set any high value
+} req_meta;
+
+void init_req_meta() {
+	req_meta.request_id = 0;
+	req_meta.range_high = 1e4; // keep range smaller so that there is constant time per ops.
+	req_meta.range_low = 9e3;
+	req_meta.swing_delay = 0; 
+	req_meta.low_load_delay = 5.5e5;
+	req_meta.high_load_delay = 2e5;
+	req_meta.inter_req_delay = 5.5e5; // start with low load always.
+	req_meta.service_start_time = 0;
+	return;
+}
+
 void print_live_servers() {
 	struct live_server_entry* ptr = live_serv_list;
 	printf("--------------- Printing Live Servers -----------\n");
@@ -124,29 +148,6 @@ struct live_server_entry* get_server_entry(char *IP) {
 		eptr = eptr->next;
 	}
 	return eptr;
-}
-
-struct request_meta {
-	long request_id;
-	int range_high; // request data max value.
-	int range_low; // request data min value.
-	int swing_delay; // could be +ve/-ve;
-	unsigned int low_load_delay; // 1000 micro-second for usleep().
-	unsigned int high_load_delay; // 10 micro-seconds for usleep().
-	unsigned int inter_req_delay; // in micro-seconds. set to 1 seconds. let the signal handler decide.
-	time_t service_start_time; // set any high value
-} req_meta;
-
-void init_req_meta() {
-	req_meta.request_id = 0;
-	req_meta.range_high = 1e4; // keep range smaller so that there is constant time per ops.
-	req_meta.range_low = 9e3;
-	req_meta.swing_delay = 0; 
-	req_meta.low_load_delay = 5.5e5;
-	req_meta.high_load_delay = 1.7e5;
-	req_meta.inter_req_delay = 3e5;
-	req_meta.service_start_time = 0;
-	return;
 }
 
 static inline void update_swing() {
@@ -398,7 +399,7 @@ int connect_to_autoscaler() {
 	}
 }
 
-void scale_out(char *message, int msg_len, char *TYPE, char *IP) {
+void scale_out(char *message, int msg_len, char *IP) {
 
 	struct live_server_entry* ptr = get_server_entry(IP);
 	
@@ -417,12 +418,10 @@ void scale_out(char *message, int msg_len, char *TYPE, char *IP) {
 	}
 	make_non_block_socket(server_sock_fd); // so that response thread do not block(means entire process does not block)
 	
-
 	struct epoll_event interested_event; // struct epoll_event is inbuilt structure we just created variable of this struct type to store interested event data for this epoll instance.
 	interested_event.data.fd = server_sock_fd; // adding the socket fd
 	interested_event.events = EPOLLIN | EPOLLET; // adding the event type for this socket fd.
 	epoll_ctl(my_epoll.epoll_fd, EPOLL_CTL_ADD, server_sock_fd, &interested_event); // adding the socket to epoll instance.
-	printf("socket fd:%d added to epoll\n", server_sock_fd);
 	
 	strcpy(message, STR_SUCCESS);
 	write(auto_sclr_sock_fd, message, msg_len);
@@ -434,7 +433,7 @@ void scale_out(char *message, int msg_len, char *TYPE, char *IP) {
 	return;
 }
 
-void scale_in(char *message, int msg_len, char *TYPE, char *IP) {
+void scale_in(char *message, int msg_len, char *IP) {
 	struct live_server_entry* ptr = get_server_entry(IP);
 	if(ptr == NULL) {
 		printf("Server already disconnected at IP:%s\n", IP);
@@ -458,7 +457,20 @@ void scale_in(char *message, int msg_len, char *TYPE, char *IP) {
 
 }
 
+void check_consistency(char *message, int msg_len, char *IP) {
+	struct live_server_entry* ptr = get_server_entry(IP);
 
+	if(ptr != NULL) { 	// already connected.
+		strcpy(message, STR_SUCCESS);
+		write(auto_sclr_sock_fd, message, msg_len);
+		return;
+	}
+
+	// not connected scale out.
+	printf("Consistency called connecting to idle server\n");
+	scale_out(message, msg_len, IP);
+	return;
+}
 
 void main() {
 
@@ -500,13 +512,17 @@ void main() {
 		IP = strtok(NULL, ";");
 
 		if(strcmp(TYPE, "SCALE_OUT") == 0) {
-			scale_out(message, msg_len, TYPE, IP);
+			scale_out(message, msg_len, IP);
 			print_live_servers();
 			continue;
 		}
 		if(strcmp(TYPE, "SCALE_IN") == 0) {
-			scale_in(message, msg_len, TYPE, IP);
+			scale_in(message, msg_len, IP);
 			print_live_servers();
+			continue;
+		}
+		if(strcmp(TYPE, "CONSISTENT") == 0) {
+			check_consistency(message, msg_len, IP);
 			continue;
 		}
 	}
