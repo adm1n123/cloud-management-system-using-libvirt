@@ -59,7 +59,7 @@ void *serve(void *thread_no) {
 
 			if(len == 0) { // event occured but client didn't query means client disconnected.
 				close(sock_fd);
-				printf("load balancer disconnected. socket fd: %d closed of thread no: %d\n", sock_fd, thread_idx);
+				fprintf(logs_fd, "load balancer disconnected. socket fd: %d closed of thread no: %d\n", sock_fd, thread_idx);
 				continue;
 			}
 			// read all the requests in this socket.
@@ -92,7 +92,7 @@ void make_non_block_socket(int fd) {
 	flags |= O_NONBLOCK; // adding one more flag to socket. F_SETFL is set flag command.
 	flags = fcntl(fd, F_SETFL, flags); // setting the new flag.
 	if(flags == -1) {
-		printf("non block failed for fd: %d", fd);
+		fprintf(logs_fd, "non block failed for fd: %d", fd);
 		exit(0);
 	}
 }
@@ -104,9 +104,9 @@ int create_lstn_sock_fd() {
 	
 	int lstn_sock_fd = socket(AF_INET, SOCK_STREAM, 0);
 	if(lstn_sock_fd == -1) {
-		printf("listening socket creation failed\n");
+		fprintf(logs_fd, "listening socket creation failed\n");
 		exit(0);
-	} else printf("listening socket created\n");
+	} else fprintf(logs_fd, "listening socket created\n");
 
 	lstn_socket.sin_family = AF_INET;
 	lstn_socket.sin_addr.s_addr = htonl(INADDR_ANY);
@@ -114,15 +114,15 @@ int create_lstn_sock_fd() {
 
 	flag = bind(lstn_sock_fd, (struct sockaddr *)&lstn_socket, sizeof(lstn_socket));
 	if(flag == -1) {
-		printf("Bind failed\n");
+		fprintf(logs_fd, "Bind failed\n");
 		exit(0);
-	} else printf("Bind successful\n");
+	} else fprintf(logs_fd, "Bind successful\n");
 
 	flag = listen(lstn_sock_fd, 5);
 	if(flag == -1) {
-		printf("Error listening on socket\n");
+		fprintf(logs_fd, "Error listening on socket\n");
 		exit(0);
-	} else printf("listening...\n");
+	} else fprintf(logs_fd, "listening...\n");
 	return lstn_sock_fd;
 }
 
@@ -156,10 +156,10 @@ int main() {
 		// accept(listen_fd, NULL, NULL); we can use this also because we are not using client IP,port etc. hence no point in passing second argument. second argument is reference to structure in which connected clients IP, port is stored.
 		clnt_sock_fd = accept(lstn_sock_fd, (struct sockaddr *)&client_addr, &len);
 		if(clnt_sock_fd == -1) {
-			printf("Error accepting: error:%d\n", clnt_sock_fd);
+			fprintf(logs_fd, "Error accepting: error:%d\n", clnt_sock_fd);
 			//exit(0);
 			continue;
-		} else printf("connection accepted\n");
+		} else fprintf(logs_fd, "connection accepted\n");
 
 		// for EPOLLET events it is advisable to use non-blocking operations on fd eg. read/write on socket.
 		make_non_block_socket(clnt_sock_fd);
@@ -168,7 +168,7 @@ int main() {
 		interested_event.data.fd = clnt_sock_fd; // adding the socket fd
 		interested_event.events = EPOLLIN | EPOLLET; // adding the event type for this socket fd.
 		epoll_ctl(epolls[turn].epoll_fd, EPOLL_CTL_ADD, clnt_sock_fd, &interested_event); // adding the socket to epoll instance.
-		printf("socket fd:%d added to thread no: %d\n", clnt_sock_fd, turn);
+		fprintf(logs_fd, "socket fd:%d added to thread no: %d\n", clnt_sock_fd, turn);
 		turn = (turn + 1) % n_threads;
 	}
 	close(lstn_sock_fd);
