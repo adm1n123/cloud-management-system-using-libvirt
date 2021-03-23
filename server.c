@@ -127,7 +127,6 @@ int create_lstn_sock_fd() {
 }
 
 void init_logs() {
-	sleep(30);
 	logs_fd = fopen("server.logs", "w");
 	if(logs_fd == NULL) {
 		fprintf(stderr, "Server logs creation failed\n");
