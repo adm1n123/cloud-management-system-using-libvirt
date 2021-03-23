@@ -127,11 +127,12 @@ int create_lstn_sock_fd() {
 }
 
 void init_logs() {
-	logs_fd = fopen("server.logs", "a");
-	if(logs_fd < 0) {
+	logs_fd = fopen("server.logs", "w");
+	if(logs_fd == NULL) {
 		fprintf(stderr, "Server logs creation failed\n");
 		return;
 	}
+	setbuf(logs_fd, NULL);
 	// dup2(logs_fd, STDOUT_FILENO); // all the print messages will go to logs.
 	time_t cur_time;
 	time(&cur_time);

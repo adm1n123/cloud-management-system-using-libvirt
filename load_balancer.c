@@ -251,6 +251,7 @@ void *process_server_responses(void *arg) {
 	fprintf(fd, "Total request sent: %ld\n", req_meta.request_id);
 	time(&cur_time);
 	fprintf(fd, "#####################   Processing stopped at: %s", ctime(&cur_time));
+	fclose(fd);
 }
 
 void stop_response_thread() {
