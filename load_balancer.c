@@ -222,6 +222,7 @@ void stop_request_thread() {
 void *process_server_responses(void *arg) {
 
 	FILE *fd = fopen("response.txt", "w");
+	setbuf(fd, NULL);
 	time_t cur_time;
 	time(&cur_time);
 	fprintf(fd, "###############   Processing Server Responses Start Time: %s", ctime(&cur_time));
