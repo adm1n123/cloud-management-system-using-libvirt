@@ -221,6 +221,11 @@ void stop_request_thread() {
 
 void *process_server_responses(void *arg) {
 
+	FILE *fd = fopen("response.txt", "w");
+	time_t cur_time;
+	time(&cur_time);
+	fprintf(fd, "###############   Processing Server Responses Start Time: %s", ctime(&cur_time));
+
 	static int buff_len = 100;
 	char buff[buff_len];
 	int nfds, len;
@@ -228,23 +233,24 @@ void *process_server_responses(void *arg) {
 		nfds = epoll_wait(my_epoll.epoll_fd, my_epoll.response_events, 10, 1);// 10 is the maxevents to be returned by call (we have allocated space for 10 events during epoll instance creation you can increase) 1 timeout means wait for 1 second.
 		for(int i = 0; i < nfds; i++) {
 			int sock_fd = my_epoll.response_events[i].data.fd;
-			printf("Reading from socket\n");
 			len = read(sock_fd, buff, sizeof(buff));
 			if(len == 0) { // event occured but no data means server disconnected. don't close fd let autoscaler inform what to do.
 				// printf("Server disconnected sock fd: %d\n", sock_fd);
 				continue;
 			}
-			/*
-			TODO: read until socket is empty.
-			*/
-			
-			printf("Server response: %s\n", buff);
+			while(len > 0) {
+				fprintf(fd, "Server response: %s\n", buff);
+				// printf("Server response: %s\n", buff);
+				len = read(sock_fd, buff, sizeof(buff));
+			}
 		}
 		if(threads.res_thread_args != NULL) {
 			break;
 		}
 	}
-
+	fprintf(fd, "Total request sent: %ld\n", req_meta.request_id);
+	time(&cur_time);
+	fprintf(fd, "#####################   Processing stopped at: %s", ctime(&cur_time));
 }
 
 void stop_response_thread() {

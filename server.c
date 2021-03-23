@@ -23,6 +23,8 @@ new client's connection request is allocated to worker threads in round robbin f
 #include <time.h>
 #include "server.h"
 
+FILE *logs_fd; // server.logs file.
+
 // function prototypes
 void *echo(void *thread_no); // server method to echo the client query. we can prepare server response for query.
 void init_epolls_threads(); // creating threads and creating epoll instance for each thread.
@@ -62,6 +64,7 @@ void *serve(void *thread_no) {
 			}
 			// read all the requests in this socket.
 			while(len > 0) {
+				fprintf(logs_fd, "Client: %s\n", buff);
 				sum_prime(buff, buff_len);
 				write(sock_fd, buff, buff_len);
 				len = read(sock_fd, buff, buff_len);
@@ -124,7 +127,7 @@ int create_lstn_sock_fd() {
 }
 
 void init_logs() {
-	int logs_fd = open("server.logs", O_CREAT|O_WRONLY|O_APPEND, S_IRWXU);
+	logs_fd = fopen("server.logs", "a");
 	if(logs_fd < 0) {
 		fprintf(stderr, "Server logs creation failed\n");
 		return;
@@ -132,8 +135,8 @@ void init_logs() {
 	// dup2(logs_fd, STDOUT_FILENO); // all the print messages will go to logs.
 	time_t cur_time;
 	time(&cur_time);
-	printf("\n\n#####################   Server Started   #####################\nServer Start Time: %s", ctime(&cur_time));
-	printf("##############################################################\n");
+	fprintf(logs_fd, "\n\n#####################   Server Started   #####################\nServer Start Time: %s", ctime(&cur_time));
+	fprintf(logs_fd, "##############################################################\n");
 	return;
 }
 

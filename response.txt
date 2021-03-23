@@ -1,0 +1,19 @@
+###############   Processing Server Responses Start Time: Tue Mar 23 22:19:57 2021
+Server response: REQ_ID:0;REQ_DATA:9383;RES_DATA:5068821;
+Server response: REQ_ID:1;REQ_DATA:9886;RES_DATA:5637088;
+Server response: REQ_ID:2;REQ_DATA:9777;RES_DATA:5499476;
+Server response: REQ_ID:3;REQ_DATA:9915;RES_DATA:5666783;
+Server response: REQ_ID:4;REQ_DATA:9793;RES_DATA:5528835;
+Server response: REQ_ID:5;REQ_DATA:9335;RES_DATA:5012703;
+Server response: REQ_ID:6;REQ_DATA:9386;RES_DATA:5068821;
+Server response: REQ_ID:7;REQ_DATA:9492;RES_DATA:5219839;
+Server response: REQ_ID:8;REQ_DATA:9649;RES_DATA:5373133;
+Server response: REQ_ID:9;REQ_DATA:9421;RES_DATA:5125265;
+Server response: REQ_ID:10;REQ_DATA:9362;RES_DATA:5050073;
+Server response: REQ_ID:11;REQ_DATA:9027;RES_DATA:4709822;
+Server response: REQ_ID:12;REQ_DATA:9690;RES_DATA:5411839;
+Server response: REQ_ID:13;REQ_DATA:9059;RES_DATA:4755043;
+Server response: REQ_ID:14;REQ_DATA:9763;RES_DATA:5479940;
+Server response: REQ_ID:15;REQ_DATA:9926;RES_DATA:5676706;
+Total request sent: 16
+#####################   Processing stopped at: Tue Mar 23 22:20:10 2021
