@@ -215,7 +215,7 @@ int connect_to_load_balancer() {
 }
 
 int notify_load_balancer(virDomainPtr domPtr, int NOTI_TYPE) {
-	printf("noti called\n");
+	// printf("noti called\n");
 	static int msg_len = 50;
 	char *STR_SUCCESS = "SUCCESS";
 	char *STR_FAILED = "FAILED";
@@ -225,14 +225,19 @@ int notify_load_balancer(virDomainPtr domPtr, int NOTI_TYPE) {
 	char *IP = NULL; // IP of domPtr
 	char *TYPE;
 
-	printf("getting interfaces\n");
+	// printf("getting interfaces\n");
 	virDomainInterfacePtr *ifaces = NULL;
-	int ifaces_count = virDomainInterfaceAddresses(domPtr, &ifaces, 0, 0);
+	int ifaces_count;
+	do {
+		sleep(1);	// wait for a second don't busy wait.
+		ifaces_count = virDomainInterfaceAddresses(domPtr, &ifaces, 0, 0);
+	}while(ifaces == NULL);		// when machine is booting it gives NULL sometimes.
+	
 	if(ifaces_count < 0) {
-		fprintf(stderr, "Error getting interfaces\n");
+		printf("Error getting interfaces\n");
 		return FAILED;
 	}
-	printf("printing addresses\n");
+
 	virDomainIPAddressPtr ip_addr = ifaces[0]->addrs + 0; // only one interface hence ifaces[0] is used for VM IP. +0 for first entry of array of IPs of interface. 
 	
 	IP = ip_addr->addr;
@@ -242,7 +247,6 @@ int notify_load_balancer(virDomainPtr domPtr, int NOTI_TYPE) {
 	}
 
 	IP = strcat(IP, ";");
-	printf("GOT IP address\n");
 	if(NOTI_TYPE == NOTI_SCALE_OUT) {
 		TYPE = "SCALE_OUT;";
 	} else if(NOTI_TYPE == NOTI_SCALE_IN) {
@@ -262,17 +266,17 @@ int notify_load_balancer(virDomainPtr domPtr, int NOTI_TYPE) {
 	}
 
 	flag = read(load_bal_sock_fd, message, msg_len);
-	printf("NOTI response from load balancer: %s, flag:%d, message length:%ld\n", message, flag, sizeof(message));
+	// printf("NOTI response from load balancer: %s, flag:%d, message length:%ld\n", message, flag, sizeof(message));
 	if(flag != msg_len) {
 		fprintf(stderr, "Error getting ACK\n");
 		return FAILED;
 	}
 	
 	if(strncmp(message, STR_SUCCESS, strlen(STR_SUCCESS)) == 0) {
-		printf("Noti success\n");
+		printf("NOTI SUCCESS\n");
 		return SUCCESS;
 	}
-	printf("Noti failed\n");
+	printf("NOTI FAILED\n");
 	return FAILED;
 }
 
@@ -280,19 +284,27 @@ unsigned long long int get_total_cpu_time(struct doms_stats* ptr) {
 	int nparams = virDomainGetCPUStats(ptr->domPtr, NULL, 0, -1, 1, 0); // nparams
 	virTypedParameterPtr params = calloc(nparams, sizeof(virTypedParameter));
 	virDomainGetCPUStats(ptr->domPtr, params, nparams, -1, 1, 0); // total stats.
-	return params[0].value.ul; // total cpu time in nano seconds since boot(system setup may be it depends).
-
+	
 	// printf("Printing parameters and value\n");
 	// for(int i = 0; i < nparams; i++) {
 	// 	printf("%s: %lld\n", params[i].field, params[i].value.ul); // this time is in nano seconds.
 	// }
+	return params[0].value.ul; // total cpu time in nano seconds since boot(system setup may be it depends).
 }
 
-unsigned long long int get_total_cpu_time_interval(struct doms_stats* ptr, int seconds) {
-	unsigned long long int begin = get_total_cpu_time(ptr);
+unsigned long long int get_guest_cpu_time(struct doms_stats* ptr) {
+	int nparams = virDomainGetCPUStats(ptr->domPtr, NULL, 0, -1, 1, 0); // nparams
+	virTypedParameterPtr params = calloc(nparams, sizeof(virTypedParameter));
+	virDomainGetCPUStats(ptr->domPtr, params, nparams, -1, 1, 0); // total stats.
+	unsigned long long int guest_time = params[0].value.ul - (params[1].value.ul + params[2].value.ul);	// guest time = total - (user + system)
+	return guest_time > 0? guest_time: 0;	// somtimes guest time is -ve so to avoid overflow.
+}
+
+unsigned long long int get_cpu_time_interval(struct doms_stats* ptr, int seconds) {
+	unsigned long long int begin = get_guest_cpu_time(ptr);
 	sleep(seconds);
-	unsigned long long int end = get_total_cpu_time(ptr);
-	return end - begin;
+	unsigned long long int end = get_guest_cpu_time(ptr);
+	return (end - begin) > 0? end-begin: 0;
 }
 
 int analyse_cpu_usage() {
@@ -310,24 +322,24 @@ int analyse_cpu_usage() {
 		}
 		ptr->llast = ptr->last;
 		ptr->last = ptr->current;
-		ptr->current = get_total_cpu_time_interval(ptr, 1); // 1000 msec. if sleeping for n seconds divide time difference by n during calulation.
+		ptr->current = get_cpu_time_interval(ptr, 1); // 1000 msec. if sleeping for n seconds divide time difference by n during calulation.
 
 		double avg_cpu_time = 0.20*(ptr->llast / 1.0e9) + 0.40*(ptr->last / 1.0e9) + 0.40*(ptr->current / 1.0e9); // divide by nano sec to get time spend per second.
-		double cur_cpu_per = avg_cpu_time / 1.05;	// our thread sleeps for 1.2 sec (that difference between two reading but thread nearly sleeps for 1 sec.)
+		double cur_cpu_per = avg_cpu_time / 1.00;	// our thread sleeps for 1.2 sec (that difference between two reading but thread nearly sleeps for 1 sec.)
 		// time difference is actually sum of time difference of all the CPUs allocated so if you allocated more than one CPUs then dynamically check how many CPUs allocated
 		// to domain currently and then divide by that. NOTE: if one cpu is allocated cur_per == 1.0(approx) if 2 CPUs allocated to domain cur_per = 2.0(approx).
 		// if both VMs runs together then one CPU is allocated to each because there are not enough CPUs(PC has total 4 hence 3 cannot be allocated to VMs) so cur_per for both VMs is 1.0(approx).
 
-		ptr->cpu_percent = 0.25 * ptr->cpu_percent + 0.75 * cur_cpu_per; // considering long history with small factor.
+		ptr->cpu_percent = 0.00 * ptr->cpu_percent + 1.00 * cur_cpu_per; // considering long history with small factor.
 		avg_cpu_per += ptr->cpu_percent;
 		dom_count += 1;
 
-		printf("Domain: %s, %%cpu : %lf\n", virDomainGetName(ptr->domPtr), ptr->cpu_percent);
+		printf("Domain: %s, %%cpu : %lf\n", virDomainGetName(ptr->domPtr), ptr->cpu_percent * 100);
 		ptr = ptr->next;
 	}
 
 	avg_cpu_per /= dom_count;
-	printf("Number of doms: %d, 	avg %%cpu %lf\n", dom_count, avg_cpu_per);
+	printf("Number of doms: %d, 	avg %%cpu %lf\n", dom_count, avg_cpu_per * 100);
 
 	if(avg_cpu_per > 0.80) return CPU_USAGE_HIGH;
 	if(avg_cpu_per > 0.40) return CPU_USAGE_MOD;
@@ -358,7 +370,6 @@ bool is_noti_dom_crt_faild() {	// check already created but not notified doms
 }
 
 void scale_out() {
-	printf("Scale out called\n");
 	
 	if(is_noti_dom_crt_faild() == true) return; // make sure all the created doms are notified before creating any new dom.
 
@@ -378,7 +389,7 @@ void scale_out() {
 	}
 	printf("Got new domain to scale out\n");
 	struct doms_stats* sptr = insert_dom_stat(domPtr);
-	printf("check 1\n");
+	// sleep(20); // wait notify give segmentation fault while reading interfaces when machine is booting.
 	int notified = notify_load_balancer(sptr->domPtr, NOTI_SCALE_OUT); // start sending request to this.
 	if(notified == SUCCESS) {
 		sptr->notified = NOTI_DOM_CRT_SUCC;
@@ -393,18 +404,18 @@ void scale_out() {
 
 void scale_in() {
 	// check already stopped but not notified doms
-	printf("check 1\n");
+
 	if(is_noti_dom_crt_faild() == true) return; // all domain created must be notified before shuting down any random domain. it might be possible avg usage is low and connected one is shutdown.
 
 	struct doms_stats* sptr = statsPtr;
 	while(sptr != NULL) {
 		if(sptr->notified == NOTI_DOM_SHTDWN_FAILD) {
 			int notified = notify_load_balancer(sptr->domPtr, NOTI_SCALE_IN); // stop sending request to this.
-			printf("check 2\n");
+
 			if(notified == SUCCESS && 
 				virDomainShutdown(sptr->domPtr) == 0) { // 0: success
 					delete_dom_stat(sptr->domPtr);
-					printf("Shuting down domain: %s\n", virDomainGetName(sptr->domPtr));
+					printf("Shutting down domain: %s\n", virDomainGetName(sptr->domPtr));
 					stablize_cpu_usage(3);
 			}
 			return; // don't shutdown if any one noti is pending.
@@ -414,29 +425,23 @@ void scale_in() {
 	if(virConnectNumOfDomains(conn) <= 1) { // number of active domains. don't stop all the domains.
 		return;
 	}
-	printf("check 5\n");
+
 	virDomainPtr domPtr = NULL;
 	for(int i = 0; i < my_doms.doms_count; i++) {
 		if(virDomainIsActive(my_doms.domains[i]) == 1) { 	// virDomainState see the state it should not be shuting down state. but I am using doms_stats list to verify this.
 				domPtr = my_doms.domains[i]; 			// get any one domain to shutdown.
 				struct doms_stats* tmp = get_dom_stat(domPtr);
 				if(tmp == NULL) return; // wait until machine properly shutdown because entry is only deleted when machine is being shutdown.
-				printf("check 4\n");
 				break;
 		} 
 	}
-	printf("check 6\n");
 	int notified = notify_load_balancer(domPtr, NOTI_SCALE_IN); // inform to stop sending request
-	printf("check 7\n");
 	sptr = get_dom_stat(domPtr);
-	printf("check 8:sptr:%p\n", sptr);
 	sptr->notified = NOTI_DOM_SHTDWN_FAILD; // if noti success and domain shutdown success then only remove entry from live servers
-	printf("check 9\n");
 	if(notified == SUCCESS && 
 		virDomainShutdown(domPtr) == 0) { // 0: success
-			printf("check 10\n");
 			delete_dom_stat(domPtr);
-			printf("Shuting down domain: %s\n", virDomainGetName(domPtr));
+			printf("Shutting down domain: %s\n", virDomainGetName(domPtr));
 			stablize_cpu_usage(3);
 	}
 	return;
@@ -473,23 +478,36 @@ void main() {
 	
 	init();
 
-	// pthread_t const_thread;
-	// pthread_create(&const_thread, NULL, &maintain_consistency, NULL);
+	pthread_t const_thread;
+	pthread_create(&const_thread, NULL, &maintain_consistency, NULL);
 
+	int HIGH_PATIENCE = 3;
+	int LOW_PATIENCE = 3;
+
+	int high_count = 0;
+	int low_count = 0;
 	while(true) {
-		printf("analysis called\n");
 		int load = analyse_cpu_usage();
-		printf("analysis done\n");
 		if(load == CPU_USAGE_HIGH) {
 			printf("CPU Usage High\n");
-			scale_out(); // increase resources
+			low_count = 0;
+			high_count += 1;
+			if(high_count > HIGH_PATIENCE)
+				scale_out(); // increase resources
+
 		} else if(load == CPU_USAGE_LOW) {
 			printf("CPU Usage Low\n");
-			scale_in();
+			high_count = 0;
+			low_count += 1;
+			if(low_count > LOW_PATIENCE)
+				scale_in();
+	
 		} else {
 			printf("CPU Usage Moderate\n");
+			low_count = 0;
+			high_count = 0;
 		}
-		sleep(3);
+		sleep(5);
 	}
 
 	// close(sock_fd);

@@ -82,7 +82,7 @@ void init_req_meta() {
 	req_meta.range_low = 9e3;
 	req_meta.swing_delay = 0; 
 	req_meta.low_load_delay = 5.5e5;
-	req_meta.high_load_delay = 2e5;
+	req_meta.high_load_delay = 2e5;//2e5 for > 80% utilization
 	req_meta.inter_req_delay = 5.5e5; // start with low load always.
 	req_meta.service_start_time = 0;
 	return;
@@ -117,7 +117,6 @@ struct live_server_entry* insert_server_entry(char *IP, int server_sock_fd) {
 
 void delete_server_entry(char *IP) {
 	printf("Deleting server entry IP%s:\n", IP);
-	print_live_servers();
 	if(live_serv_list == NULL) {
 		return;
 	}
@@ -125,7 +124,6 @@ void delete_server_entry(char *IP) {
 	if(strcmp(eptr->IP, IP) == 0) {
 		live_serv_list = eptr->next;
 		free(eptr);
-		print_live_servers();
 		return;
 	}
 	while(eptr->next != NULL && strcmp(eptr->next->IP, IP) != 0) {
@@ -135,7 +133,6 @@ void delete_server_entry(char *IP) {
 	struct live_server_entry* tmp = eptr->next;
 	eptr->next = eptr->next->next;
 	free(tmp);
-	print_live_servers();
 	return;
 }
 
@@ -218,7 +215,6 @@ void stop_request_thread() {
 	return;
 }
 
-
 void *process_server_responses(void *arg) {
 
 	FILE *fd = fopen("response.txt", "w");
@@ -226,6 +222,11 @@ void *process_server_responses(void *arg) {
 	time_t cur_time;
 	time(&cur_time);
 	fprintf(fd, "###############   Processing Server Responses Start Time: %s", ctime(&cur_time));
+
+	long int response_count = 0;
+	long int last_request_id = 0;
+	time_t last_time = time(NULL);
+	time_t now_time;
 
 	static int buff_len = 100;
 	char buff[buff_len];
@@ -241,17 +242,27 @@ void *process_server_responses(void *arg) {
 			}
 			while(len > 0) {
 				fprintf(fd, "Server response: %s\n", buff);
-				// printf("Server response: %s\n", buff);
 				len = read(sock_fd, buff, sizeof(buff));
+				response_count += 1;
 			}
 		}
 		if(threads.res_thread_args != NULL) {
 			break;
 		}
+
+		now_time = time(NULL);
+		if(now_time > last_time + 5) {	// for every 5 seconds.
+			int sec_diff = now_time-last_time;
+			printf("Throughput: Serving %.2lf req/sec, 	Sending %.2lf req/sec\n", (1.0 * response_count)/sec_diff, (req_meta.request_id - last_request_id) * 1.00 /sec_diff);
+			response_count = 0;
+			last_request_id = req_meta.request_id;
+			last_time = now_time;
+		}
 	}
 	fprintf(fd, "Total request sent: %ld\n", req_meta.request_id);
 	time(&cur_time);
 	fprintf(fd, "#####################   Processing stopped at: %s", ctime(&cur_time));
+	fflush(fd);
 	fclose(fd);
 }
 
@@ -372,6 +383,7 @@ void signal_handler(int sig_type) {
 			printf("Waiting for 3 seconds for any server responses ...\n");
 			sleep(3);
 			threads.res_thread_args = (void *)1;
+			sleep(3);
 			pthread_join(threads.res_thread, NULL);
 			printf("Response thread stopped\n");
 			destroy();
