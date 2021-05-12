@@ -2,7 +2,9 @@
 
 ## compile
 $ make autoscaler <br>
-$ make load_balancer
+$ make load_balancer <br>
+$ make server <br>
+deploy server executable in virtual machines (setup server as startup process)
 
 ## run
 $ ./load_balancer <br>
