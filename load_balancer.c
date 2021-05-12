@@ -1,13 +1,3 @@
-/*
-This server program echoes the client query. Multiple clients are supported.
-Number of worder threads can be specified for handling client query. Main process is
-handling listening socket in main() mehtod.
-
-Each worker thread is handling one epoll instance in this design(single worker thread can handle many epoll instances), one epoll instance is handling many socket fds for events.
-new client's connection request is allocated to worker threads in round robbin fashion.
-
-*/
-
 #include <stdio.h> 
 #include <stdlib.h> 
 #include <string.h> 
