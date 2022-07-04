@@ -1,0 +1,73 @@
+####################################  VIVA questions #######################################
+server script is configured in rc.local for auto startup.
+cd /etc
+vim rc.local
+
+server images are store in /var/lib/libvirt/images  by default.
+
+
+
+Installed packages:
+$ sudo apt-get install qemu-kvm libvirt-daemon-system libvirt-clients bridge-utils
+$ sudo apt-get install virt-manager
+$ sudo apt qemu
+$ sudo apt install libvirt-dev		# this is needed for developing programs using libvirt APIs
+
+- if you have installed libvirt that means you have already 'virsh' CLI to communicate to libvirt because libvirt is just API and it must have
+some interface (CLI) to communicate with. but virt-manager is optional install.
+
+
+
+
+Steps followed to install VMs
+- used virt-manager default NAT for network interface
+- detect the keyboard(it was different by default)
+- used all the default options provided except the SSH (just selected the install openSSH but didn't select any(github/launchpad))
+- when ever stucked shutdown the VM if not then force shutdown the VM then start.
+- when you get error: [failed] remove media /cdrom.  just force shut the VM and start again.
+- when you see cloud init screen but not booting OS just enter userid and password to login into system. then create file touch /etc/cloud/cloud-init.disabled  which will disabled the cloud init. see 
+	https://askubuntu.com/questions/539277/how-to-get-rid-of-cloud-init
+
+
+Login to server:
+	You can directly open window from virt-manager for VM and login into terminal but in general server machines could be anywhere we should not physically use server machines keyboard. Hence use ssh from
+	your PC to login into server It is as powerful as login into server machine.
+
+	Login to VM1:
+		$ ssh adm1n123_vm1@192.168.122.21
+		ubuntu20.04   VM1: user: adm1n123_vm1		pass: qazzaq
+
+	Login to VM2:
+		$ ssh adm1n123_vm2@192.168.122.39
+		ubuntu20.04-2 VM2: user: adm1n123_vm2		pass: qazzaq
+
+	Logout from server terminal:
+		$ exit
+
+	Poweroff server:
+		$ sudo poweroff
+		
+
+
+Transfer files between VM1, VM2, and Host using sftp: NOTE: your(clients) relative path is from where you connected to sftp   and servers relative path you can see using sftp> pwd 
+absolute path works anytime.
+
+	connect to server:
+		$ sftp adm1n123_vm1@192.168.122.89
+
+		you can use ls, pwd etc. commands to see the files and directories
+
+	copy from server to your PC:
+		stfp> get <server files absolute/relative path from pwd>  <your PCs absolute/relative path>
+		sftp> get test.txt /home/adm1n123
+
+	copy from PC to server:
+		sftp> put <your PCs absolute/relative path> <server files absolute/relative path from pwd>
+		sftp> put /home/adm1n123/play/host.txt
+
+	exit:
+		sftp> bye
+
+
+
+
